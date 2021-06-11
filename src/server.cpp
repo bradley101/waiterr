@@ -36,16 +36,17 @@ int main(int argc, char **argv) {
   char *msg = "Server says hello!";
 
   while (1) {
-    printf("* Waiting for new connection");
+    printf("* Waiting for new connection *\n");
     if ((in_sock = accept(sock, (struct sockaddr*) &address, (socklen_t*) &addr_len)) < 0) {
       perror("In socket accept");
       exit(4);
     }
 
+    const char* data_to_send = "HTTP/1.1 200 OK\nContent-Type: text/plain\nContent-Length: 12\n\nHello world!";
     char buffer[30000] = {0};
     val_read = read(in_sock, buffer, 30000);
     printf("%s\n\n", buffer);
-    write(in_sock, msg, strlen(msg));
+    write(in_sock, data_to_send, strlen(data_to_send));
     printf("* Msg sent *");
     close(in_sock);
   }
