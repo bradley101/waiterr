@@ -1,5 +1,18 @@
-#ifndef WAITERR_INCL
-#define WAITERR_INCL
+/*
+    Author - Shantanu Banerjee <hi@shantanubanerjee.com>
+
+    Wanted to learn C++ in some proper manner
+    So whats better than make some good project thats useful and you haven't 
+    seen in c++ for a while now.
+
+    I'm writing shit here but it doesn't matter. I wanted to write something 
+    interesting here.
+
+    Thanks for reading. 
+*/
+
+#pragma once
+
 #include <sys/socket.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -43,8 +56,27 @@ typedef const ss css;
         css CONTENT_TYPE = "Content-Type";
     };
 
-    class Request {
+    ss** separate_params_from_url(ss url) {
+        ss **url_param_tuple = new ss*[2];
+        size_t pos_ques = url.find("?");
+        if (pos_ques == ss::npos) {
+            url_param_tuple[0] = &url;
+            url_param_tuple[1] = nullptr;
+        } else {
+            ss *t1, *t2;
+            t1 = new ss(url.substr(0, pos_ques));
+            t2 = new ss(url.substr(pos_ques + 1));
+            url_param_tuple[0] = t1;
+            url_param_tuple[1] = t2;
+        }
+        return url_param_tuple;
+    }
 
+    class Request {
+        public:
+            std::map<css, ss> header_map;
+
+            Request() {}
     };
 
     class Response {
@@ -96,10 +128,11 @@ typedef const ss css;
             }
     };
 
-    struct _threadH_paramStruct {
+    typedef struct _threadH_paramStruct {
         int incoming_socket;
         std::map<css, std::function<void(waiterr::Request&, waiterr::Response&)> >& get_callbacks;
-    };
+        std::map<css, std::function<void(waiterr::Request&, waiterr::Response&)> >& post_callbacks;
+    } thread_struct;
 
     class Waiter {
         
@@ -110,17 +143,24 @@ typedef const ss css;
             int address_length = sizeof(struct sockaddr_in);
             enum operation_codes setup_socket();
             enum operation_codes accept_connections();
+            
             static void* handle_new_connection(void * incoming_params);
+            static void transfer_connection_to_callbacks(css parse_method_and_url, thread_struct params);
+
+
             std::map<css, std::function<void(waiterr::Request&, waiterr::Response&)> > get_callbacks;
-        
+            std::map<css, std::function<void(waiterr::Request&, waiterr::Response&)> > post_callbacks;
+
         public:
             Waiter(int port) : port(port) {
                 setup_socket();
             }
 
             enum operation_codes start_listen();
+            enum operation_codes start_listen(std::function<void()> listen_callback);
 
             void get(css uri_path, std::function<void(waiterr::Request&, waiterr::Response&)> callback);
+            void post(css uri_path, std::function<void(waiterr::Request&, waiterr::Response&)> callback);
 
             int getPort() { return port; }
     };
@@ -158,11 +198,21 @@ waiterr::operation_codes waiterr::Waiter::start_listen() {
     return accept_connections();
 }
 
+waiterr::operation_codes waiterr::Waiter::start_listen(std::function<void()> listen_callback) {
+    if ((listen(sock, 1)) < 0) {
+        throw waiterr::WaiterrException("Some error in listen operation. Exiting");
+    }
+    listen_callback();
+    return accept_connections();
+}
+
 void* waiterr::Waiter::handle_new_connection(void * incoming_params) {
     struct _threadH_paramStruct param_struct = *((struct _threadH_paramStruct *) incoming_params);
     
     char *buffer = new char[4096];
     int val_read = read(param_struct.incoming_socket, buffer, 4096);
+
+    std::cout << buffer << "\n";
 
     std::stringstream buffer_ss(buffer);
 
@@ -173,27 +223,36 @@ void* waiterr::Waiter::handle_new_connection(void * incoming_params) {
         [&, param_struct](ss& parse_method_and_url) {
             
             if (parse_method_and_url.find(":") == ss::npos) {
-            
-                std::stringstream method_params(parse_method_and_url);
-                ss method, url_format;
-                std::getline(method_params, method, ' ');
-                std::getline(method_params, url_format, ' ');
-
-                Request req; 
-                Response *res = new Response(param_struct.incoming_socket);
-                
-                if (method.compare("GET") == 0) {
-                    param_struct.get_callbacks[url_format](req, *res);
-                    close(param_struct.incoming_socket);
-                }
-
+                Waiter::transfer_connection_to_callbacks(parse_method_and_url, param_struct);
             }
         }(buffer_line);
     }
 
-    // write(param_struct.incoming_socket, data_to_send, strlen(data_to_send));
-
     return (void*) NULL;
+}
+
+void waiterr::Waiter::transfer_connection_to_callbacks(css parse_method_and_url, thread_struct params) {
+    
+    std::stringstream method_params(parse_method_and_url);
+    ss method, url;
+    Request req; Response res(params.incoming_socket);
+
+    std::getline(method_params, method, ' ');
+    std::getline(method_params, url, ' ');
+    
+    ss** url_param_tuple = separate_params_from_url(url);
+    url = *url_param_tuple[0];
+    ss *get_params = url_param_tuple[1];
+
+    if (method.compare("GET") == 0) {
+        if (params.get_callbacks.find(url) != params.get_callbacks.end()) {
+            params.get_callbacks[url](req, res);
+        }
+        close(params.incoming_socket);
+    } else if (method.compare("POST")) {
+        params.post_callbacks[url](req, res);
+        close(params.incoming_socket);
+    }
 }
 
 waiterr::operation_codes waiterr::Waiter::accept_connections() {
@@ -206,7 +265,7 @@ waiterr::operation_codes waiterr::Waiter::accept_connections() {
         }
         
         pthread_t in_conn_th;
-        struct _threadH_paramStruct thread_params = { in_socket, get_callbacks};
+        struct _threadH_paramStruct thread_params = { in_socket, get_callbacks, post_callbacks};
 
         pthread_create(&in_conn_th, NULL, handle_new_connection, (void *)(&thread_params));
     }
@@ -217,4 +276,9 @@ void waiterr::Waiter::get(css uri_path, std::function<void(waiterr::Request&, wa
     get_callbacks[uri_path] = callback;
 }
 
-#endif
+void waiterr::Waiter::post(css uri_path, std::function<void(waiterr::Request&, waiterr::Response&)> callback) {
+    post_callbacks[uri_path] = callback;
+}
+
+
+
